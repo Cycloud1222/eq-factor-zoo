@@ -74,9 +74,9 @@
 
 ## 图表
 
-![因子 IC](results/figures/sample_ic_bar.png)
+![因子 IC](../../results/figures/sample_ic_bar.png)
 
-![组合净值](results/figures/sample_equity_curve.png)
+![组合净值](../../results/figures/sample_equity_curve.png)
 
 ## 解释边界
 

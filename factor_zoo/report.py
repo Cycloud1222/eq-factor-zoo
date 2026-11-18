@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import matplotlib
@@ -44,7 +45,7 @@ def write_report(settings: Settings, prefix: str = "") -> Path:
         path = settings.figures_dir / f"{name}ic_bar.png"
         fig.savefig(path, dpi=160)
         plt.close(fig)
-        figure_lines.append(f"![因子 IC]({path.relative_to(settings.root).as_posix()})")
+        figure_lines.append(f"![因子 IC]({Path(os.path.relpath(path, docs_dir)).as_posix()})")
 
     if not series.empty and "net_return" in series.columns:
         series = series.copy()
@@ -61,7 +62,7 @@ def write_report(settings: Settings, prefix: str = "") -> Path:
         path = settings.figures_dir / f"{name}equity_curve.png"
         fig.savefig(path, dpi=160)
         plt.close(fig)
-        figure_lines.append(f"![组合净值]({path.relative_to(settings.root).as_posix()})")
+        figure_lines.append(f"![组合净值]({Path(os.path.relpath(path, docs_dir)).as_posix()})")
 
     lines = [
         "# EQ-FACTOR-01 因子研究自动报告",
