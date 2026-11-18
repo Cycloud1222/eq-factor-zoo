@@ -88,6 +88,6 @@ def write_report(settings: Settings, prefix: str = "") -> Path:
         "- 需要使用真实数据、滚动样本外和交易成本复核后才能写入简历或报告结论。",
         "- 因子筛选只能使用设计和验证期；2023–2025 不得参与筛选。",
     ]
-    destination = docs_dir / f"{'demo_' if prefix else ''}factor_zoo_report.md"
+    destination = docs_dir / f"{f'{prefix}_' if prefix else ''}factor_zoo_report.md"
     destination.write_text("\n".join(lines), encoding="utf-8")
     return destination

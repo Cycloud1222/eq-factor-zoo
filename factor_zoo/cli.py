@@ -49,7 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--retries", type=int, default=3)
     daily.add_argument("--sleep", type=float, default=0.05)
 
-    sub.add_parser("download-industry", help="下载月度历史行业快照")
+    industry_parser = sub.add_parser("download-industry", help="下载历史行业快照")
+    industry_parser.add_argument(
+        "--frequency",
+        choices=["monthly", "quarterly", "annual"],
+        default="monthly",
+    )
 
     panel_parser = sub.add_parser("build-panel", help="合并 raw parquet 为日线面板")
     panel_parser.add_argument("--force", action="store_true")
@@ -95,7 +100,7 @@ def main(argv: list[str] | None = None) -> None:
             sleep_seconds=args.sleep,
         )
     elif args.command == "download-industry":
-        data.download_industry(settings)
+        data.download_industry(settings, frequency=args.frequency)
     elif args.command == "build-panel":
         data.build_panel(settings, force=args.force)
     elif args.command == "build-universe":

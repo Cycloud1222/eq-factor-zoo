@@ -1,13 +1,14 @@
 # EQ-FACTOR-01：A 股价格量因子库
 
-用全 A 股动态股票池研究 24 个价量因子：它们在中性化后是否仍有横截面预测力，哪些因子只是换手、风格暴露或多重检验造成的假象，以及一个去相关组合在真实成本下是否还能存活。
+目标是用全 A 股动态股票池研究 24 个价量因子：它们在中性化后是否仍有横截面预测力，哪些因子只是换手、风格暴露或多重检验造成的假象，以及一个去相关组合在真实成本下是否还能存活。
 
 这不是“找一个高收益因子”的项目。主结果是因子评价表、因子衰减、相关聚类和可复现的样本外组合；如果最终没有稳定 alpha，也会如实交付零结果。
 
 ## 当前状态
 
 - 数据管道、24 个因子、行业/规模中性化、RankIC、分组、衰减、相关性、BH 多重检验、组合回测和报告代码已实现。
-- 合成数据 demo 已能端到端运行；真实全 A 股结果需要先在研究机器下载数据并运行 `research`。
+- 合成数据 demo 已能端到端运行；当前已用 1,262 个可用历史行情代码完成首轮真实样本审计，结果见 [首轮样本报告](docs/reports/sample_results_2026-11-18.md)。
+- 完整全 A 股历史列表和日线下载尚未完成；当前结果不能外推为全市场结论。
 - 当前报告中的 demo 数值只用于验证流程，不是市场结论。
 
 ## 快速开始
@@ -28,6 +29,15 @@ factor-zoo research
 factor-zoo report
 ```
 
+当前已有的真实样本运行使用 `configs/sample_2020.yaml`：
+
+```powershell
+factor-zoo --config configs/sample_2020.yaml build-panel --force
+factor-zoo --config configs/sample_2020.yaml build-universe --force
+factor-zoo --config configs/sample_2020.yaml research --prefix sample
+factor-zoo --config configs/sample_2020.yaml report --prefix sample
+```
+
 也可以直接调用模块：
 
 ```powershell
@@ -42,6 +52,8 @@ python -m factor_zoo.cli demo
 - 规模代理：`float_mcap_proxy = amount / (turn / 100)`；使用前应与 AKShare 或 Wind 的流通市值抽样核对。
 
 原始数据和缓存不进入 Git。详见 [研究设计](docs/RESEARCH_DESIGN.md) 和 [因子目录](docs/FACTOR_CATALOG.md)。
+
+当前真实样本的详细表格和图表见 [首轮样本报告](docs/reports/sample_results_2026-11-18.md) 与 [自动因子报告](docs/reports/sample_factor_zoo_report.md)。
 
 ## 研究口径
 
@@ -67,7 +79,7 @@ tests/                   合成数据单元测试
 
 ## 重要限制
 
-1. 先完成数据闸门再解释结果：全历史股票列表、至少 15 个行业快照、足够的月度覆盖和规模代理校验。
+1. 先完成数据闸门再解释结果：全历史股票列表、足够的行业快照、月度覆盖和规模代理校验。当前 1,262 代码样本只是阶段性结果。
 2. 2023–2025 不得参与因子筛选；如果改代码后重新选择因子，必须把测试集重新定义。
 3. 当前是日频研究和月频调仓，不包含分钟级、订单簿或实盘执行。
 4. 规模代理是从换手率反推的近似值；没有通过抽样校验前不要把规模中性化结果当作最终结论。

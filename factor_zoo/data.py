@@ -75,6 +75,21 @@ def month_end_dates(settings: Settings, calendar: pd.DataFrame | None = None) ->
     return dates.groupby(periods).max().sort_values().tolist()
 
 
+def snapshot_dates(settings: Settings, frequency: str = "monthly") -> list[pd.Timestamp]:
+    """Select month-end dates at monthly, quarterly or annual resolution."""
+    dates = month_end_dates(settings)
+    series = pd.Series(dates)
+    if frequency == "monthly":
+        return series.tolist()
+    if frequency == "quarterly":
+        periods = series.dt.to_period("Q")
+    elif frequency == "annual":
+        periods = series.dt.to_period("Y")
+    else:
+        raise ValueError(f"不支持的行业快照频率：{frequency}")
+    return series.groupby(periods).max().sort_values().tolist()
+
+
 def _stock_list_path(settings: Settings, day: pd.Timestamp) -> Path:
     return settings.raw_dir / "stock_lists" / f"{day:%Y-%m-%d}.parquet"
 
@@ -230,10 +245,19 @@ def download_daily(
     return manifest
 
 
-def download_industry(settings: Settings, force: bool = False) -> pd.DataFrame:
-    """Download month-end BaoStock industry snapshots."""
+def download_industry(
+    settings: Settings,
+    force: bool = False,
+    frequency: str = "monthly",
+) -> pd.DataFrame:
+    """Download BaoStock industry snapshots at the requested resolution.
+
+    Annual snapshots are a practical fallback when API latency makes monthly
+    snapshots prohibitively slow. The effective date and age are still kept
+    point-in-time; the resolution used is recorded in the output.
+    """
     settings.prepare_dirs()
-    dates = month_end_dates(settings)
+    dates = snapshot_dates(settings, frequency=frequency)
     bs = _login()
     frames = []
     try:
@@ -280,6 +304,7 @@ def download_industry(settings: Settings, force: bool = False) -> pd.DataFrame:
     ].copy()
     industry["date"] = pd.to_datetime(industry["date"])
     industry["industry"] = industry["industry"].fillna("Unknown").astype("string")
+    industry["snapshot_frequency"] = frequency
     industry.to_parquet(settings.processed_dir / "industry.parquet", index=False)
     return industry
 
