@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local data and generated market files
+data/
+*.parquet
+results/tables/demo_*
+results/figures/demo_*
+docs/reports/demo_*
+
+# Secrets and local environment
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

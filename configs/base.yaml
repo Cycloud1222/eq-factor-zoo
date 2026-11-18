@@ -1,0 +1,37 @@
+project:
+  name: EQ-FACTOR-01
+  start_date: "2016-01-01"
+  end_date: "2025-12-31"
+
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  results_dir: results/tables
+  figures_dir: results/figures
+
+universe:
+  min_listed_days: 120
+  min_median_amount_20d: 20000000
+  exclude_st: true
+  exclude_suspended: true
+
+factors:
+  winsor_lower: 0.01
+  winsor_upper: 0.99
+  min_cross_section: 30
+
+walk_forward:
+  design_end: "2019-12-31"
+  validation_end: "2022-12-31"
+  test_start: "2023-01-01"
+
+portfolio:
+  n_quantiles: 5
+  long_quantile: 5
+  top_fraction: 0.10
+  max_weight: 0.02
+  max_factors: 6
+  correlation_threshold: 0.70
+  cost_bps: 10
+  cost_sensitivity_bps: [20, 30]
+  annualization: 12

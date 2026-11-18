@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eq-factor-zoo"
+version = "0.1.0"
+description = "A-share price-volume factor library with point-in-time universe, neutralization, decay and out-of-sample portfolio research"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "baostock>=0.9",
+  "matplotlib>=3.8",
+  "numpy>=2.0",
+  "pandas>=2.2",
+  "pyarrow>=15",
+  "PyYAML>=6",
+  "scipy>=1.12",
+  "statsmodels>=0.14",
+  "tabulate>=0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5"]
+validate = ["akshare>=1.16"]
+
+[project.scripts]
+factor-zoo = "factor_zoo.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["factor_zoo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
