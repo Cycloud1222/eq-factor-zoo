@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import data
+from .akshare_data import download_missing_akshare
 from .config import load_settings
 from .pipeline import run_demo, run_research
 from .report import write_report
@@ -41,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("download-stock-lists", help="下载历史股票列表并生成月度并集")
+    sub.add_parser("build-stock-union", help="从已缓存股票列表构建代码并集")
 
     daily = sub.add_parser("download-daily", help="下载 BaoStock 日线")
     daily.add_argument("--limit", type=int, default=0)
@@ -48,6 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--force", action="store_true")
     daily.add_argument("--retries", type=int, default=3)
     daily.add_argument("--sleep", type=float, default=0.05)
+    daily.add_argument("--workers", type=int, default=1)
+
+    ak_parser = sub.add_parser(
+        "download-akshare-missing",
+        help="用 AKShare 补下 BaoStock 缓存中缺失的代码",
+    )
+    ak_parser.add_argument("--workers", type=int, default=4)
+    ak_parser.add_argument("--retries", type=int, default=2)
+    ak_parser.add_argument("--limit", type=int, default=0)
 
     industry_parser = sub.add_parser("download-industry", help="下载历史行业快照")
     industry_parser.add_argument(
@@ -90,6 +101,9 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "download-stock-lists":
         data.download_stock_lists(settings)
+    elif args.command == "build-stock-union":
+        union = data.build_stock_union_from_cache(settings)
+        print(f"股票列表并集：{union['code'].nunique()} 个代码，{union['date'].nunique()} 个月份")
     elif args.command == "download-daily":
         data.download_daily(
             settings,
@@ -98,7 +112,16 @@ def main(argv: list[str] | None = None) -> None:
             force=args.force,
             retries=args.retries,
             sleep_seconds=args.sleep,
+            workers=args.workers,
         )
+    elif args.command == "download-akshare-missing":
+        manifest = download_missing_akshare(
+            settings,
+            workers=args.workers,
+            retries=args.retries,
+            limit=args.limit,
+        )
+        print(manifest["status"].value_counts().to_dict())
     elif args.command == "download-industry":
         data.download_industry(settings, frequency=args.frequency)
     elif args.command == "build-panel":

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import socket
 import time
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -33,13 +35,21 @@ def _fetch_result(result, table_name: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=result.fields)
 
 
-def _login():
+def _login(retries: int = 3):
     import baostock as bs
 
-    result = bs.login()
-    if result.error_code != "0":
-        raise RuntimeError(f"BaoStock 登录失败：{result.error_msg}")
-    return bs
+    last_error = ""
+    for attempt in range(1, retries + 1):
+        try:
+            result = bs.login()
+            if result.error_code == "0":
+                return bs
+            last_error = result.error_msg
+        except Exception as error:
+            last_error = str(error)
+        if attempt < retries:
+            time.sleep(5)
+    raise RuntimeError(f"BaoStock 登录失败：{last_error}")
 
 
 def _logout(bs) -> None:
@@ -101,6 +111,7 @@ def download_stock_lists(settings: Settings, force: bool = False) -> pd.DataFram
     using only the current stock list would reintroduce survivorship bias.
     """
     settings.prepare_dirs()
+    socket.setdefaulttimeout(60)
     dates = month_end_dates(settings)
     bs = _login()
     frames: list[pd.DataFrame] = []
@@ -110,7 +121,19 @@ def download_stock_lists(settings: Settings, force: bool = False) -> pd.DataFram
             if path.exists() and not force:
                 raw = pd.read_parquet(path)
             else:
-                raw = _fetch_result(bs.query_all_stock(day=f"{day:%Y-%m-%d}"), "股票列表")
+                for attempt in range(1, 4):
+                    try:
+                        raw = _fetch_result(
+                            bs.query_all_stock(day=f"{day:%Y-%m-%d}"),
+                            "股票列表",
+                        )
+                        break
+                    except Exception:
+                        _logout(bs)
+                        time.sleep(2)
+                        bs = _login()
+                else:
+                    raise RuntimeError(f"{day} 股票列表在重试后仍失败")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 raw.to_parquet(path, index=False)
             if "code" not in raw.columns:
@@ -153,6 +176,39 @@ def load_stock_codes(settings: Settings, limit: int = 0, offset: int = 0) -> lis
     return codes[:limit] if limit else codes
 
 
+def build_stock_union_from_cache(settings: Settings) -> pd.DataFrame:
+    """Union all cached monthly stock lists without making new API calls."""
+    files = sorted((settings.raw_dir / "stock_lists").glob("*.parquet"))
+    if not files:
+        raise FileNotFoundError("没有已缓存的 stock_lists/*.parquet")
+    frames = []
+    for path in files:
+        raw = pd.read_parquet(path)
+        if "code" not in raw.columns:
+            continue
+        codes = raw["code"].astype("string").str.strip()
+        codes = codes.loc[codes.str.match(A_SHARE_PATTERN, na=False)]
+        if codes.empty:
+            continue
+        frames.append(pd.DataFrame({
+            "date": pd.Timestamp(path.stem),
+            "code": codes.to_numpy(),
+        }))
+    union = (
+        pd.concat(frames, ignore_index=True)
+        .drop_duplicates(["date", "code"])
+        .sort_values(["date", "code"])
+        .reset_index(drop=True)
+    )
+    union.to_parquet(settings.raw_dir / "stock_list_union.parquet", index=False)
+    union.to_csv(
+        settings.raw_dir / "stock_list_union.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    return union
+
+
 def download_daily(
     settings: Settings,
     codes: list[str] | None = None,
@@ -161,9 +217,11 @@ def download_daily(
     offset: int = 0,
     retries: int = 3,
     sleep_seconds: float = 0.05,
+    workers: int = 1,
 ) -> pd.DataFrame:
     """Download daily bars for the union of historical A-share codes."""
     settings.prepare_dirs()
+    socket.setdefaulttimeout(60)
     codes = codes or load_stock_codes(settings, limit=limit, offset=offset)
     raw_dir = settings.raw_dir / "baostock"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -177,63 +235,45 @@ def download_daily(
     )
     existing = set()
     if not force:
-        existing = {
-            str(code)
-            for code in manifest.loc[manifest["status"] == "success", "code"].astype(str)
-            if (raw_dir / f"{code}.parquet").exists()
-        }
+        # Existing parquet files are authoritative; a manifest row can be
+        # missing when raw files were copied from another research machine.
+        existing = {path.stem for path in raw_dir.glob("*.parquet")}
+
+    todo = [code for code in codes if force or code not in existing]
+    if not todo:
+        return manifest
+    if workers > 1:
+        chunks = [todo[index::workers] for index in range(workers)]
+        records = []
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(
+                    _download_chunk,
+                    settings,
+                    chunk,
+                    retries,
+                    sleep_seconds,
+                )
+                for chunk in chunks
+                if chunk
+            ]
+            for future in futures:
+                records.extend(future.result())
+        if records:
+            manifest = pd.concat([manifest, pd.DataFrame(records)], ignore_index=True)
+            manifest.to_csv(manifest_path, index=False, encoding="utf-8-sig")
+        return manifest
 
     bs = _login()
     records = []
     try:
-        for index, code in enumerate(codes, start=1):
+        for index, code in enumerate(todo, start=1):
             path = raw_dir / f"{code}.parquet"
-            if code in existing and path.exists():
+            if not force and code in existing and path.exists():
                 continue
-            last_error = ""
-            frame = pd.DataFrame()
-            for attempt in range(1, max(1, retries) + 1):
-                try:
-                    frame = _fetch_result(
-                        bs.query_history_k_data_plus(
-                            code,
-                            DAILY_FIELDS,
-                            start_date=settings.start_date.strftime("%Y-%m-%d"),
-                            end_date=settings.end_date.strftime("%Y-%m-%d"),
-                            frequency="d",
-                            adjustflag="1",
-                        ),
-                        f"{code} 日线",
-                    )
-                    last_error = ""
-                    break
-                except Exception as error:
-                    last_error = str(error)
-                    if attempt < retries:
-                        time.sleep(2)
-
-            if last_error or frame.empty:
-                status = "empty" if not last_error else "failed"
-                records.append({
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "code": code,
-                    "status": status,
-                    "rows": 0,
-                    "error": last_error,
-                    "downloaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                print(f"[{index}/{len(codes)}] {code}: {status}")
-            else:
-                frame.to_parquet(path, index=False)
-                records.append({
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "code": code,
-                    "status": "success",
-                    "rows": len(frame),
-                    "error": "",
-                    "downloaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                print(f"[{index}/{len(codes)}] {code}: {len(frame)} rows")
+            record = _download_one(bs, settings, code, retries)
+            records.append(record)
+            print(f"[{index}/{len(todo)}] {code}: {record['status']}")
             if sleep_seconds:
                 time.sleep(sleep_seconds)
     finally:
@@ -243,6 +283,83 @@ def download_daily(
         manifest = pd.concat([manifest, pd.DataFrame(records)], ignore_index=True)
         manifest.to_csv(manifest_path, index=False, encoding="utf-8-sig")
     return manifest
+
+
+def _download_one(bs, settings: Settings, code: str, retries: int) -> dict:
+    """Download one stock using an already logged-in BaoStock session."""
+    path = settings.raw_dir / "baostock" / f"{code}.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    last_error = ""
+    frame = pd.DataFrame()
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            frame = _fetch_result(
+                bs.query_history_k_data_plus(
+                    code,
+                    DAILY_FIELDS,
+                    start_date=settings.start_date.strftime("%Y-%m-%d"),
+                    end_date=settings.end_date.strftime("%Y-%m-%d"),
+                    frequency="d",
+                    adjustflag="1",
+                ),
+                f"{code} 日线",
+            )
+            last_error = ""
+            break
+        except Exception as error:
+            last_error = str(error)
+            if attempt < retries:
+                time.sleep(2)
+    if last_error or frame.empty:
+        return {
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "code": code,
+            "status": "empty" if not last_error else "failed",
+            "rows": 0,
+            "error": last_error,
+            "downloaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    frame.to_parquet(path, index=False)
+    return {
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "code": code,
+        "status": "success",
+        "rows": len(frame),
+        "error": "",
+        "downloaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def _download_chunk(
+    settings: Settings,
+    codes: list[str],
+    retries: int,
+    sleep_seconds: float,
+) -> list[dict]:
+    """Worker process entry point: one BaoStock login for a chunk of codes."""
+    try:
+        bs = _login()
+    except Exception as error:
+        return [
+            {
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "code": code,
+                "status": "failed",
+                "rows": 0,
+                "error": str(error),
+                "downloaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            for code in codes
+        ]
+    records = []
+    try:
+        for code in codes:
+            records.append(_download_one(bs, settings, code, retries))
+            if sleep_seconds:
+                time.sleep(sleep_seconds)
+    finally:
+        _logout(bs)
+    return records
 
 
 def download_industry(
@@ -257,6 +374,7 @@ def download_industry(
     point-in-time; the resolution used is recorded in the output.
     """
     settings.prepare_dirs()
+    socket.setdefaulttimeout(60)
     dates = snapshot_dates(settings, frequency=frequency)
     bs = _login()
     frames = []
@@ -266,10 +384,19 @@ def download_industry(
             if path.exists() and not force:
                 raw = pd.read_parquet(path)
             else:
-                raw = _fetch_result(
-                    bs.query_stock_industry(date=f"{day:%Y-%m-%d}"),
-                    "行业分类",
-                )
+                for attempt in range(1, 4):
+                    try:
+                        raw = _fetch_result(
+                            bs.query_stock_industry(date=f"{day:%Y-%m-%d}"),
+                            "行业分类",
+                        )
+                        break
+                    except Exception:
+                        _logout(bs)
+                        time.sleep(2)
+                        bs = _login()
+                else:
+                    raise RuntimeError(f"{day} 行业快照在重试后仍失败")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 raw.to_parquet(path, index=False)
             if raw.empty:
